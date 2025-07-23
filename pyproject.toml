@@ -28,6 +28,9 @@ svk-xmp = "svk_xmp.cli.commands:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/svk_xmp"]
+
 [tool.hatch.build]
 include = [
     "src/svk_xmp/**/*.py",

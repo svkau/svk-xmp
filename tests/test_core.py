@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import json
 import subprocess
+import zipfile
 
 from svk_xmp.core.exiftool_wrapper import ExifToolWrapper
 from svk_xmp.core.metadata_processor import MetadataProcessor
@@ -189,6 +190,215 @@ class TestExifToolWrapper:
                     with patch('pathlib.Path.unlink'):
                         result = wrapper.restore_metadata_from_xml_string(xml_content, 'test.pdf')
                         assert result is False
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_single_file_success(self, mock_which):
+        """Test successful sync of single file."""
+        wrapper = ExifToolWrapper()
+        
+        # Mock validation
+        mock_validate_result = Mock()
+        mock_validate_result.stderr = ""
+        
+        # Mock sync operation  
+        mock_sync_result = Mock()
+        mock_sync_result.stderr = ""
+        
+        with patch('subprocess.run', side_effect=[mock_validate_result, mock_sync_result]):
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch.object(wrapper, '_get_files_to_process', return_value=[Path('test.jpg')]):
+                    result = wrapper.sync_metadata('test.jpg', verbose=True)
+                    
+                    assert result['summary']['total_files'] == 1
+                    assert result['summary']['processed'] == 1
+                    assert result['summary']['errors'] == 0
+                    assert result['processed'] == ['test.jpg']
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_directory_success(self, mock_which):
+        """Test successful sync of directory."""
+        wrapper = ExifToolWrapper()
+        
+        # Mock validation and sync for multiple files
+        mock_validate_result = Mock()
+        mock_validate_result.stderr = ""
+        
+        mock_sync_result = Mock()
+        mock_sync_result.stderr = ""
+        
+        test_files = [Path('dir/test1.jpg'), Path('dir/test2.jpg')]
+        
+        with patch('subprocess.run', side_effect=[mock_validate_result, mock_sync_result] * 2):
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch.object(wrapper, '_get_files_to_process', return_value=test_files):
+                    result = wrapper.sync_metadata('test_dir', verbose=False)
+                    
+                    assert result['summary']['total_files'] == 2
+                    assert result['summary']['processed'] == 2
+                    assert result['summary']['errors'] == 0
+                    assert len(result['processed']) == 2
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_with_validation_error(self, mock_which):
+        """Test sync with validation error."""
+        wrapper = ExifToolWrapper()
+        
+        # Mock validation failure
+        mock_validate_result = Mock()
+        mock_validate_result.stderr = "Error: Invalid JPEG format"
+        
+        with patch('subprocess.run', return_value=mock_validate_result):
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch.object(wrapper, '_get_files_to_process', return_value=[Path('bad.jpg')]):
+                    result = wrapper.sync_metadata('bad.jpg', verbose=True)
+                    
+                    assert result['summary']['total_files'] == 1
+                    assert result['summary']['processed'] == 0
+                    assert result['summary']['errors'] == 1
+                    assert len(result['errors']) == 1
+                    assert 'bad.jpg' in result['errors'][0]['file']
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_with_warnings(self, mock_which):
+        """Test sync with warnings."""
+        wrapper = ExifToolWrapper()
+        
+        # Mock validation
+        mock_validate_result = Mock()
+        mock_validate_result.stderr = ""
+        
+        # Mock sync with warnings
+        mock_sync_result = Mock()
+        mock_sync_result.stderr = "Warning: Missing GPS data\nWarning: No IPTC data found"
+        
+        with patch('subprocess.run', side_effect=[mock_validate_result, mock_sync_result]):
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch.object(wrapper, '_get_files_to_process', return_value=[Path('test.jpg')]):
+                    result = wrapper.sync_metadata('test.jpg', verbose=True)
+                    
+                    assert result['summary']['total_files'] == 1
+                    assert result['summary']['processed'] == 1
+                    assert result['summary']['warnings'] == 2
+                    assert len(result['warnings']) == 2
+                    assert 'Missing GPS data' in result['warnings'][0]['warning']
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_file_not_found(self, mock_which):
+        """Test sync with nonexistent file."""
+        wrapper = ExifToolWrapper()
+        
+        with pytest.raises(FileNotFoundError):
+            wrapper.sync_metadata('nonexistent.jpg')
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_args_file_not_found(self, mock_which):
+        """Test sync with nonexistent args file."""
+        wrapper = ExifToolWrapper()
+        
+        with patch('pathlib.Path.exists', return_value=False):
+            with pytest.raises(FileNotFoundError, match="Arguments file not found"):
+                wrapper.sync_metadata('test.jpg', args_file='nonexistent.args')
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_sync_metadata_skip_unsupported_files(self, mock_which):
+        """Test sync skipping unsupported file types."""
+        wrapper = ExifToolWrapper()
+        
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch.object(wrapper, '_get_files_to_process', return_value=[Path('test.txt')]):
+                result = wrapper.sync_metadata('test.txt', verbose=True)
+                
+                assert result['summary']['total_files'] == 1
+                assert result['summary']['processed'] == 0
+                assert result['summary']['skipped'] == 1
+                assert result['skipped'] == ['test.txt']
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_get_files_to_process_single_file(self, mock_which):
+        """Test file discovery for single file."""
+        wrapper = ExifToolWrapper()
+        
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch('pathlib.Path.is_file', return_value=True):
+                with patch('pathlib.Path.suffix', new_property=lambda x: '.jpg'):
+                    files = wrapper._get_files_to_process(Path('test.jpg'), ['.jpg'], True)
+                    assert files == [Path('test.jpg')]
+
+    # Note: Directory file discovery is tested through integration tests
+    # The _get_files_to_process method is complex to mock due to Path method interactions
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_get_files_from_zip(self, mock_which):
+        """Test file discovery from zip archive."""
+        wrapper = ExifToolWrapper()
+        
+        # Mock zip file contents
+        mock_file_info = Mock()
+        mock_file_info.is_dir.return_value = False
+        mock_file_info.filename = 'image.jpg'
+        
+        mock_zip = Mock()
+        mock_zip.filelist = [mock_file_info]
+        mock_zip.__enter__ = Mock(return_value=mock_zip)
+        mock_zip.__exit__ = Mock(return_value=None)
+        
+        with patch('zipfile.ZipFile', return_value=mock_zip):
+            files = wrapper._get_files_from_zip(Path('test.zip'), ['.jpg'])
+            assert files == ['test.zip#image.jpg']
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_get_files_from_zip_bad_zip(self, mock_which):
+        """Test file discovery from corrupted zip."""
+        wrapper = ExifToolWrapper()
+        
+        with patch('zipfile.ZipFile', side_effect=zipfile.BadZipFile):
+            with pytest.raises(ExifToolError):
+                wrapper._get_files_from_zip(Path('bad.zip'), ['.jpg'])
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_validate_file_success(self, mock_which):
+        """Test successful file validation."""
+        wrapper = ExifToolWrapper()
+        
+        mock_result = Mock()
+        mock_result.stderr = ""
+        
+        with patch('subprocess.run', return_value=mock_result):
+            # Should not raise exception
+            wrapper._validate_file('test.jpg')
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_validate_file_with_warnings(self, mock_which):
+        """Test file validation with warnings."""
+        wrapper = ExifToolWrapper()
+        
+        mock_result = Mock()
+        mock_result.stderr = "Warning: Minor corruption detected"
+        
+        with patch('subprocess.run', return_value=mock_result):
+            # Should not raise exception for warnings
+            wrapper._validate_file('test.jpg')
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_validate_file_with_error(self, mock_which):
+        """Test file validation with errors."""
+        wrapper = ExifToolWrapper()
+        
+        mock_result = Mock()
+        mock_result.stderr = "Error: File is corrupted"
+        
+        with patch('subprocess.run', return_value=mock_result):
+            with pytest.raises(ExifToolError):
+                wrapper._validate_file('test.jpg')
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_validate_file_command_failure(self, mock_which):
+        """Test file validation when command fails."""
+        wrapper = ExifToolWrapper()
+        
+        with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'exiftool', stderr='Command failed')):
+            with pytest.raises(ExifToolError):
+                wrapper._validate_file('test.jpg')
 
 
 class TestMetadataProcessor:
@@ -423,3 +633,111 @@ class TestMetadataProcessor:
         # Restore fails
         restore_success = processor.restore_pdf_metadata(xml_backup, 'test.pdf')
         assert restore_success is False
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_sync_metadata_success(self, mock_exiftool):
+        """Test successful metadata synchronization."""
+        mock_instance = mock_exiftool.return_value
+        mock_sync_result = {
+            'processed': ['test.jpg'],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {
+                'total_files': 1,
+                'processed': 1,
+                'errors': 0,
+                'warnings': 0,
+                'skipped': 0
+            }
+        }
+        mock_instance.sync_metadata.return_value = mock_sync_result
+        
+        processor = MetadataProcessor()
+        result = processor.sync_metadata('test.jpg')
+        
+        assert result == mock_sync_result
+        mock_instance.sync_metadata.assert_called_once_with(
+            path='test.jpg',
+            args_file='arg_files/metadata_sync_images.args',
+            file_extensions=None,
+            recursive=True,
+            verbose=False,
+            progress_callback=None
+        )
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_sync_metadata_with_custom_args(self, mock_exiftool):
+        """Test metadata synchronization with custom arguments."""
+        mock_instance = mock_exiftool.return_value
+        mock_sync_result = {
+            'processed': [],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {'total_files': 0, 'processed': 0, 'errors': 0, 'warnings': 0, 'skipped': 0}
+        }
+        mock_instance.sync_metadata.return_value = mock_sync_result
+        
+        processor = MetadataProcessor()
+        
+        def progress_callback(file, index, total):
+            pass
+        
+        result = processor.sync_metadata(
+            path='/test/dir',
+            args_file='custom.args',
+            file_extensions=['.jpg', '.png'],
+            recursive=False,
+            verbose=True,
+            progress_callback=progress_callback
+        )
+        
+        assert result == mock_sync_result
+        mock_instance.sync_metadata.assert_called_once_with(
+            path='/test/dir',
+            args_file='custom.args',
+            file_extensions=['.jpg', '.png'],
+            recursive=False,
+            verbose=True,
+            progress_callback=progress_callback
+        )
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_sync_metadata_error_handling(self, mock_exiftool):
+        """Test metadata sync error handling and exception wrapping."""
+        mock_instance = mock_exiftool.return_value
+        mock_instance.sync_metadata.side_effect = Exception("Exiftool failed")
+        
+        processor = MetadataProcessor()
+        
+        with pytest.raises(MetadataProcessingError) as exc_info:
+            processor.sync_metadata('test.jpg')
+        
+        assert "Failed to sync metadata: Exiftool failed" in str(exc_info.value)
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_sync_metadata_with_file_not_found_error(self, mock_exiftool):
+        """Test metadata sync when file is not found."""
+        mock_instance = mock_exiftool.return_value
+        mock_instance.sync_metadata.side_effect = FileNotFoundError("Path not found: test.jpg")
+        
+        processor = MetadataProcessor()
+        
+        with pytest.raises(MetadataProcessingError) as exc_info:
+            processor.sync_metadata('test.jpg')
+        
+        assert "Failed to sync metadata: Path not found: test.jpg" in str(exc_info.value)
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_sync_metadata_with_exiftool_error(self, mock_exiftool):
+        """Test metadata sync when exiftool command fails."""
+        mock_instance = mock_exiftool.return_value
+        mock_instance.sync_metadata.side_effect = ExifToolError("exiftool command failed")
+        
+        processor = MetadataProcessor()
+        
+        with pytest.raises(MetadataProcessingError) as exc_info:
+            processor.sync_metadata('test.jpg')
+        
+        assert "Failed to sync metadata: exiftool command failed" in str(exc_info.value)

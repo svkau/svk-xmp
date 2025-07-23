@@ -3,8 +3,9 @@
 import subprocess
 import json
 import shutil
+import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Callable, Any
 from .exceptions import ExifToolError, ExifToolNotFoundError
 
 
@@ -139,3 +140,217 @@ class ExifToolWrapper:
         finally:
             # Clean up temporary file
             Path(temp_xml_path).unlink(missing_ok=True)
+
+    def sync_metadata(
+        self, 
+        path: Union[str, Path], 
+        args_file: Union[str, Path] = "arg_files/metadata_sync_images.args",
+        file_extensions: Optional[List[str]] = None,
+        recursive: bool = True,
+        verbose: bool = False,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None
+    ) -> Dict[str, Any]:
+        """
+        Synchronize metadata between EXIF, IPTC, and XMP formats in image files.
+        
+        Args:
+            path: File, directory, or zip file to process
+            args_file: Path to exiftool arguments file for metadata synchronization
+            file_extensions: List of file extensions to process (e.g., ['.jpg', '.jpeg'])
+            recursive: Include subdirectories when processing directories
+            verbose: Enable detailed output messages
+            progress_callback: Optional callback function (current_file, current_index, total_files)
+            
+        Returns:
+            Dictionary with processing results including processed files, errors, warnings, and summary
+        """
+        path = Path(path)
+        args_file = Path(args_file)
+        
+        if not args_file.exists():
+            raise FileNotFoundError(f"Arguments file not found: {args_file}")
+            
+        # Default image file extensions
+        if file_extensions is None:
+            file_extensions = ['.jpg', '.jpeg', '.jpe', '.tif', '.tiff', '.png', '.gif', '.bmp', '.webp']
+        
+        # Convert extensions to lowercase for comparison
+        file_extensions = [ext.lower() for ext in file_extensions]
+        
+        # Initialize result structure
+        result = {
+            'processed': [],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {
+                'total_files': 0,
+                'processed': 0,
+                'errors': 0,
+                'warnings': 0,
+                'skipped': 0
+            }
+        }
+        
+        # Get list of files to process
+        files_to_process = self._get_files_to_process(path, file_extensions, recursive)
+        result['summary']['total_files'] = len(files_to_process)
+        
+        if verbose:
+            print(f"Found {len(files_to_process)} files to process")
+        
+        # Process each file
+        for index, file_path in enumerate(files_to_process):
+            if progress_callback:
+                progress_callback(str(file_path), index, len(files_to_process))
+            
+            try:
+                self._sync_single_file(file_path, args_file, result, verbose)
+            except Exception as e:
+                error_msg = f"Unexpected error processing {file_path}: {str(e)}"
+                result['errors'].append({'file': str(file_path), 'error': error_msg})
+                result['summary']['errors'] += 1
+                if verbose:
+                    print(f"ERROR: {error_msg}")
+        
+        if not verbose:
+            # Silent mode summary
+            if result['summary']['errors'] > 0:
+                print(f"Processing completed with {result['summary']['errors']} errors. Use verbose mode for details.")
+            else:
+                print(f"All {result['summary']['processed']} files processed successfully.")
+        
+        return result
+    
+    def _get_files_to_process(self, path: Path, file_extensions: List[str], recursive: bool) -> List[Path]:
+        """Get list of image files to process from path (file, directory, or zip)."""
+        files = []
+        
+        if not path.exists():
+            raise FileNotFoundError(f"Path not found: {path}")
+        
+        if path.is_file():
+            if path.suffix.lower() == '.zip':
+                # Handle zip file
+                files.extend(self._get_files_from_zip(path, file_extensions))
+            elif path.suffix.lower() in file_extensions:
+                files.append(path)
+            else:
+                # File with unsupported extension - will be skipped during processing
+                files.append(path)
+        elif path.is_dir():
+            # Handle directory
+            pattern = "**/*" if recursive else "*"
+            for file_path in path.glob(pattern):
+                if file_path.is_file() and file_path.suffix.lower() in file_extensions:
+                    files.append(file_path)
+        
+        return sorted(files)
+    
+    def _get_files_from_zip(self, zip_path: Path, file_extensions: List[str]) -> List[str]:
+        """Get list of image files from zip archive that can be processed by exiftool."""
+        files = []
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                for file_info in zf.filelist:
+                    if not file_info.is_dir():
+                        file_ext = Path(file_info.filename).suffix.lower()
+                        if file_ext in file_extensions:
+                            # Return zip file paths in exiftool format
+                            files.append(f"{zip_path}#{file_info.filename}")
+        except zipfile.BadZipFile:
+            raise ExifToolError(f"Invalid zip file: {zip_path}")
+        
+        return files
+    
+    def _sync_single_file(self, file_path: Union[Path, str], args_file: Path, result: Dict, verbose: bool):
+        """Synchronize metadata for a single file."""
+        file_str = str(file_path)
+        
+        # Check if file should be skipped based on extension
+        if isinstance(file_path, Path):
+            file_ext = file_path.suffix.lower()
+        else:
+            # Handle zip file entries
+            if '#' in file_str:
+                file_ext = Path(file_str.split('#')[1]).suffix.lower()
+            else:
+                file_ext = Path(file_str).suffix.lower()
+        
+        # Skip non-image files
+        image_extensions = ['.jpg', '.jpeg', '.jpe', '.tif', '.tiff', '.png', '.gif', '.bmp', '.webp']
+        if file_ext not in image_extensions:
+            result['skipped'].append(file_str)
+            result['summary']['skipped'] += 1
+            if verbose:
+                print(f"SKIPPED: {file_str} (unsupported file type)")
+            return
+        
+        try:
+            # First, validate the file
+            self._validate_file(file_path)
+            
+            # Perform metadata synchronization
+            args = ["-@", str(args_file), "-overwrite_original", file_str]
+            process_result = self._run_command(args)
+            
+            # Check for warnings in output
+            if process_result.stderr:
+                # Parse stderr for warnings vs errors
+                stderr_lines = process_result.stderr.strip().split('\n')
+                has_errors = False
+                warning_msgs = []
+                
+                for line in stderr_lines:
+                    if line.strip():
+                        if 'warning' in line.lower():
+                            warning_msgs.append(line.strip())
+                        else:
+                            # Treat as error if not explicitly a warning
+                            has_errors = True
+                            result['errors'].append({'file': file_str, 'error': line.strip()})
+                            result['summary']['errors'] += 1
+                            if verbose:
+                                print(f"ERROR in {file_str}: {line.strip()}")
+                
+                if warning_msgs:
+                    for warning in warning_msgs:
+                        result['warnings'].append({'file': file_str, 'warning': warning})
+                        result['summary']['warnings'] += 1
+                        if verbose:
+                            print(f"WARNING in {file_str}: {warning}")
+                
+                if has_errors:
+                    return
+            
+            # If we get here, processing was successful
+            result['processed'].append(file_str)
+            result['summary']['processed'] += 1
+            
+            if verbose:
+                print(f"Processed: {file_str}")
+                
+        except ExifToolError as e:
+            result['errors'].append({'file': file_str, 'error': str(e)})
+            result['summary']['errors'] += 1
+            if verbose:
+                print(f"ERROR in {file_str}: {str(e)}")
+    
+    def _validate_file(self, file_path: Union[Path, str]):
+        """Validate file using exiftool's -validate option."""
+        file_str = str(file_path)
+        
+        try:
+            args = ["-validate", "-warning", file_str]
+            result = self._run_command(args)
+            
+            # If there's output in stderr, it indicates validation issues
+            if result.stderr and result.stderr.strip():
+                # Check if it's an error or just warnings
+                stderr_lower = result.stderr.lower()
+                if 'error' in stderr_lower and 'warning' not in stderr_lower:
+                    raise ExifToolError(f"File validation failed: {result.stderr.strip()}")
+                # If it's just warnings, we continue (as per requirements)
+                
+        except subprocess.CalledProcessError as e:
+            raise ExifToolError(f"File validation failed: {e.stderr}")

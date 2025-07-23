@@ -1,7 +1,7 @@
 """High-level metadata processing functionality."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Callable, Any
 from .exiftool_wrapper import ExifToolWrapper
 from .exceptions import MetadataProcessingError
 
@@ -84,3 +84,43 @@ class MetadataProcessor:
     def restore_pdf_metadata(self, xml_backup: str, pdf_path: Union[str, Path]) -> bool:
         """Restore PDF metadata from XML backup."""
         return self.exiftool.restore_metadata_from_xml_string(xml_backup, pdf_path)
+
+    def sync_metadata(
+        self, 
+        path: Union[str, Path], 
+        args_file: Union[str, Path] = "arg_files/metadata_sync_images.args",
+        file_extensions: Optional[List[str]] = None,
+        recursive: bool = True,
+        verbose: bool = False,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None
+    ) -> Dict[str, Any]:
+        """
+        Synchronize metadata between EXIF, IPTC, and XMP formats in image files.
+        
+        This is a high-level interface to the ExifToolWrapper.sync_metadata method.
+        
+        Args:
+            path: File, directory, or zip file to process
+            args_file: Path to exiftool arguments file for metadata synchronization
+            file_extensions: List of file extensions to process (e.g., ['.jpg', '.jpeg'])
+            recursive: Include subdirectories when processing directories
+            verbose: Enable detailed output messages
+            progress_callback: Optional callback function (current_file, current_index, total_files)
+            
+        Returns:
+            Dictionary with processing results including processed files, errors, warnings, and summary
+            
+        Raises:
+            MetadataProcessingError: If there are issues with the processing operation
+        """
+        try:
+            return self.exiftool.sync_metadata(
+                path=path,
+                args_file=args_file,
+                file_extensions=file_extensions,
+                recursive=recursive,
+                verbose=verbose,
+                progress_callback=progress_callback
+            )
+        except Exception as e:
+            raise MetadataProcessingError(f"Failed to sync metadata: {str(e)}")

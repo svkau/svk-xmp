@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch, MagicMock
 from click.testing import CliRunner
 import json
 
-from svk_xmp.cli.commands import main, extract, remove, scan
+from svk_xmp.cli.commands import main, extract, remove, scan, sync
 from svk_xmp.core.exceptions import MyProjectError
 
 
@@ -15,6 +15,13 @@ class TestCLICommands:
     def setup_method(self):
         """Set up test fixtures."""
         self.runner = CliRunner()
+    
+    def _create_test_args_file(self):
+        """Helper to create test args file."""
+        import os
+        os.makedirs('arg_files', exist_ok=True)
+        with open('arg_files/metadata_sync_images.args', 'w') as f:
+            f.write('# Test args file')
 
     def test_main_group_help(self):
         """Test main command group help."""
@@ -274,3 +281,237 @@ class TestCLICommands:
             # Verify that MetadataProcessor was called with None
             mock_processor.assert_called_with(None)
             assert result.exit_code == 0
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_success(self, mock_processor):
+        """Test sync command with successful processing."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = {
+            'processed': ['test.jpg'],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {
+                'total_files': 1,
+                'processed': 1,
+                'errors': 0,
+                'warnings': 0,
+                'skipped': 0
+            }
+        }
+        
+        with self.runner.isolated_filesystem():
+            # Create a test file and args file
+            with open('test.jpg', 'w') as f:
+                f.write('test')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test.jpg'])
+            
+            assert result.exit_code == 0
+            assert 'Metadata synchronization completed:' in result.output
+            assert 'Total files: 1' in result.output
+            assert 'Processed: 1' in result.output
+            assert 'Errors: 0' in result.output
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_verbose(self, mock_processor):
+        """Test sync command with verbose output."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = {
+            'processed': ['test.jpg'],
+            'errors': [{'file': 'error.jpg', 'error': 'Test error'}],
+            'warnings': [{'file': 'warn.jpg', 'warning': 'Test warning'}],
+            'skipped': [],
+            'summary': {
+                'total_files': 1,
+                'processed': 1,
+                'errors': 1,
+                'warnings': 1,
+                'skipped': 0
+            }
+        }
+        
+        with self.runner.isolated_filesystem():
+            # Create a test file
+            with open('test.jpg', 'w') as f:
+                f.write('test')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test.jpg', '--verbose'])
+            
+            assert result.exit_code == 0
+            assert 'Errors:' in result.output
+            assert 'error.jpg: Test error' in result.output
+            assert 'Warnings:' in result.output
+            assert 'warn.jpg: Test warning' in result.output
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_json_format(self, mock_processor):
+        """Test sync command with JSON format output."""
+        mock_result = {
+            'processed': ['test.jpg'],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {
+                'total_files': 1,
+                'processed': 1,
+                'errors': 0,
+                'warnings': 0,
+                'skipped': 0
+            }
+        }
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = mock_result
+        
+        with self.runner.isolated_filesystem():
+            # Create a test file
+            with open('test.jpg', 'w') as f:
+                f.write('test')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test.jpg', '--format', 'json'])
+            
+            assert result.exit_code == 0
+            output_data = json.loads(result.output)
+            assert output_data == mock_result
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_with_args_file(self, mock_processor):
+        """Test sync command with custom args file."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = {
+            'processed': [],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {'total_files': 0, 'processed': 0, 'errors': 0, 'warnings': 0, 'skipped': 0}
+        }
+        
+        with self.runner.isolated_filesystem():
+            # Create test files
+            with open('test.jpg', 'w') as f:
+                f.write('test')
+            with open('custom.args', 'w') as f:
+                f.write('# Custom args file')
+            
+            result = self.runner.invoke(main, ['sync', 'test.jpg', '--args-file', 'custom.args'])
+            
+            assert result.exit_code == 0
+            mock_instance.sync_metadata.assert_called_once()
+            call_args = mock_instance.sync_metadata.call_args
+            assert call_args[1]['args_file'] == 'custom.args'
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_with_extensions(self, mock_processor):
+        """Test sync command with file extensions filter."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = {
+            'processed': [],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {'total_files': 0, 'processed': 0, 'errors': 0, 'warnings': 0, 'skipped': 0}
+        }
+        
+        with self.runner.isolated_filesystem():
+            # Create a test directory
+            import os
+            os.makedirs('test_dir')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test_dir', '--extensions', '.jpg', '--extensions', '.png'])
+            
+            assert result.exit_code == 0
+            mock_instance.sync_metadata.assert_called_once()
+            call_args = mock_instance.sync_metadata.call_args
+            assert call_args[1]['file_extensions'] == ['.jpg', '.png']
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_non_recursive(self, mock_processor):
+        """Test sync command with non-recursive option."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = {
+            'processed': [],
+            'errors': [],
+            'warnings': [],
+            'skipped': [],
+            'summary': {'total_files': 0, 'processed': 0, 'errors': 0, 'warnings': 0, 'skipped': 0}
+        }
+        
+        with self.runner.isolated_filesystem():
+            # Create a test directory
+            import os
+            os.makedirs('test_dir')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test_dir', '--no-recursive'])
+            
+            assert result.exit_code == 0
+            mock_instance.sync_metadata.assert_called_once()
+            call_args = mock_instance.sync_metadata.call_args
+            assert call_args[1]['recursive'] is False
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_with_errors(self, mock_processor):
+        """Test sync command with errors but no verbose mode."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.return_value = {
+            'processed': [],
+            'errors': [{'file': 'error.jpg', 'error': 'Test error'}],
+            'warnings': [],
+            'skipped': [],
+            'summary': {
+                'total_files': 1,
+                'processed': 0,
+                'errors': 1,
+                'warnings': 0,
+                'skipped': 0
+            }
+        }
+        
+        with self.runner.isolated_filesystem():
+            # Create a test file
+            with open('test.jpg', 'w') as f:
+                f.write('test')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test.jpg'])
+            
+            assert result.exit_code == 0
+            assert 'Errors: 1' in result.output
+            assert 'Use --verbose to see error details.' in result.output
+
+    @patch('svk_xmp.cli.commands.MetadataProcessor')
+    def test_sync_command_error_handling(self, mock_processor):
+        """Test sync command with exception handling."""
+        mock_instance = mock_processor.return_value
+        mock_instance.sync_metadata.side_effect = MyProjectError("Test sync error")
+        
+        with self.runner.isolated_filesystem():
+            # Create a test file
+            with open('test.jpg', 'w') as f:
+                f.write('test')
+            self._create_test_args_file()
+            
+            result = self.runner.invoke(main, ['sync', 'test.jpg'])
+            
+            assert result.exit_code == 1
+            assert 'Error: Test sync error' in result.output
+
+    def test_sync_command_nonexistent_file(self):
+        """Test sync command with nonexistent file."""
+        result = self.runner.invoke(main, ['sync', 'nonexistent.jpg'])
+        assert result.exit_code == 2  # Click's exit code for invalid arguments
+
+    def test_sync_command_help(self):
+        """Test sync command help output."""
+        result = self.runner.invoke(main, ['sync', '--help'])
+        assert result.exit_code == 0
+        assert 'Synchronize metadata between EXIF, IPTC, and XMP formats.' in result.output
+        assert '--args-file' in result.output
+        assert '--extensions' in result.output
+        assert '--recursive' in result.output
+        assert '--verbose' in result.output
+        assert '--format' in result.output
