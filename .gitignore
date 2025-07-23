@@ -8,6 +8,3 @@ wheels/
 
 # Virtual environments
 .venv
-
-# Project-specific files
-arg_files/

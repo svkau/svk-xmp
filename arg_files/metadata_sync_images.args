@@ -1,0 +1,193 @@
+#------------------------------------------------------------------------------
+# Dessa argument är en sammanslagning av Exiftools argument för synkning av metadata
+# Argumenten används av svk-xmp
+# 
+# Fil:         metadata_sync_images.args
+# 
+# Beskrivning: Sammanslagna argument-filer från Exiftool för synkning av metadata.
+# 
+# Användning:  exiftool -@ metadata_sync_images.args IMAGE-FILE
+#              Detta gör ändringen direkt i originalfilen. Backupfil skapas.
+# 
+# Revision:    2025-07-23 - H. Vitalis Skapad
+# 
+#------------------------------------------------------------------------------
+# File:         exif2iptc.args
+#
+# Description:  Tag name translations for converting EXIF to IPTC
+#
+# Usage:        exiftool -tagsFromFile SRCFILE -@ exif2iptc.args DSTFILE
+#
+# Requires:     ExifTool version 6.51 or later
+#
+# Revisions:    2011/09/13 - P. Harvey Created
+#               2017/07/06 - PH Set time zone from new EXIF OffsetTime tags
+#
+# Notes:     1) IPTC requires a timezone but EXIF does not support one, so
+#               the local timezone is assumed when writing the IPTC times
+#
+#            2) These arguments will not delete existing IPTC tags which are
+#               missing from the EXIF.  The IPTC tags should be deleted
+#               beforehand if required.
+#------------------------------------------------------------------------------
+-IPTC:By-line < EXIF:Artist
+-IPTC:CopyrightNotice < EXIF:Copyright
+-IPTC:Caption-Abstract < EXIF:ImageDescription
+# the inverse IPTC date and time conversions automagically pull the
+# appropriate date or time part out of the EXIF date/time value
+-IPTC:DateCreated < EXIF:DateTimeOriginal
+-IPTC:TimeCreated < EXIF:DateTimeOriginal
+-IPTC:TimeCreated < Composite:SubSecDateTimeOriginal
+-IPTC:DigitalCreationDate < EXIF:CreateDate
+-IPTC:DigitalCreationTime < EXIF:CreateDate
+-IPTC:DigitalCreationTime < Composite:SubSecCreateDate
+# end
+#------------------------------------------------------------------------------
+# File:         iptc2exif.args
+#
+# Description:  Tag name translations for converting IPTC to EXIF
+#
+# Usage:        exiftool -tagsFromFile SRCFILE -@ iptc2exif.args DSTFILE
+#
+# Requires:     ExifTool version 7.98 or later
+#
+# Revisions:    2011/09/13 - P. Harvey Created
+#               2017/07/06 - PH Set new EXIF OffsetTime tags
+#
+# Notes:        These arguments will not delete existing EXIF tags which are
+#               missing from the IPTC.  The EXIF tags should be deleted
+#               beforehand if required.
+#------------------------------------------------------------------------------
+# -EXIF:Artist < IPTC:By-line
+# -EXIF:Copyright < IPTC:CopyrightNotice
+# -EXIF:ImageDescription < IPTC:Caption-Abstract
+# -EXIF:DateTimeOriginal < Composite:DateTimeCreated
+# -EXIF:CreateDate < Composite:DigitalCreationDateTime
+# -EXIF:OffsetTimeOriginal < IPTC:TimeCreated
+# -EXIF:OffsetTimeDigitized < IPTC:DigitalCreationTime
+# end
+#------------------------------------------------------------------------------
+# File:         exif2xmp.args
+#
+# Description:  Tag name translations for converting EXIF to XMP
+#
+# Usage:        exiftool -tagsFromFile SRCFILE -@ exif2xmp.args DSTFILE
+#
+# Requires:     ExifTool version 10.96 or later
+#
+# Revisions:    2009/01/20 - P. Harvey Created
+#               2011/06/22 - PH Copy flash information via Composite:Flash
+#               2013/06/12 - PH Additions for the Exif 2.3 for XMP spec
+#               2015/01/12 - PH Avoid copying to non-standard namespaces
+#               2018/05/07 - PH Added support for GPSDestXxxRef tags
+#               2022/03/31 - PH IPTC Photometadata Mapping Guidelines 2202.1 update
+#               2024/10/24 - PH Additions for the 2024 EXIF for XMP spec
+#               2025/01/16 - PH Copy Composite SubSec tags to XMP-exif
+#               2025-04-22 - PH Fixed DigitalImageGUID source tag
+#
+# References:   http://www.metadataworkinggroup.org/specs/
+#               https://iptc.org/std/photometadata/documentation/mappingguidelines/
+#
+# Notes:     1) The first three arguments copy most of the EXIF and GPS tags to
+#               XMP-exif/XMP-tiff, and the remaining arguments handle tags
+#               which have different names and/or formats in EXIF and XMP.
+#
+#            2) These arguments will not delete existing XMP tags which are
+#               missing from the EXIF.  The XMP tags should be deleted
+#               beforehand if required.
+#
+#            3) EXIF:SubjectArea is not currently mapped into XMP-iptcExt:ImageRegion
+#------------------------------------------------------------------------------
+-XMP-exif:all < EXIF:all
+-XMP-exifEX:all < EXIF:all
+-XMP-tiff:all < EXIF:all
+-XMP-dc:Description < EXIF:ImageDescription
+# overwrite date/time values to include sub-second information if available
+-XMP-photoshop:DateCreated < EXIF:DateTimeOriginal
+-XMP-photoshop:DateCreated < Composite:SubSecDateTimeOriginal
+-XMP-xmp:CreateDate < EXIF:CreateDate
+-XMP-xmp:CreateDate < Composite:SubSecCreateDate
+-XMP-xmp:ModifyDate < EXIF:ModifyDate
+-XMP-xmp:ModifyDate < Composite:SubSecModifyDate
+-XMP-xmp:CreatorTool < EXIF:Software
+-XMP-dc:Rights < EXIF:Copyright
+-XMP-dc:Creator < EXIF:Artist
+# 
+# XMP-dc:Date uppdateras från EXIF - Detta är ett tillägg som inte finns i Exiftools argument
+-XMP-dc:Date < EXIF:DateTimeOriginal
+# 
+-XMP-iptcExt:DigitalImageGUID < EXIF:ImageUniqueID
+# XMP flash information is translated by the Composite Flash tag
+-Composite:Flash < EXIF:Flash
+# overwrite GPS tags which have different formats in XMP
+-XMP:GPSLatitude < Composite:GPSLatitude
+-XMP:GPSLongitude < Composite:GPSLongitude
+-XMP:GPSDestLatitude < Composite:GPSDestLatitude
+-XMP:GPSDestLongitude < Composite:GPSDestLongitude
+-XMP:GPSDateTime < Composite:GPSDateTime
+# new for the 2024 EXIF for XMP specification
+-XMP-exifEX:PhotographicSensitivity < EXIF:ISO
+-XMP-exif:DateTimeDigitized < EXIF:CreateDate
+# add sub-seconds and time-zone to XMP-exif tags if available
+-XMP-exif:DateTimeOriginal < Composite:SubSecDateTimeOriginal
+-XMP-exif:DateTimeDigitized < Composite:SubSecCreateDate
+# end
+#------------------------------------------------------------------------------
+# File:         iptc2xmp.args
+#
+# Description:  Tag name translations for converting from IPTC to XMP
+#
+# Usage:        exiftool -tagsFromFile SRCFILE -@ iptc2xmp.args DSTFILE
+#
+# Requires:     ExifTool version 7.45 or later
+#
+# Revisions:    2005/05/14 - P. Harvey Created
+#               2008/03/04 - PH Changed Location translation and added
+#                            IntellectualGenre and SubjectCode
+#               2008/09/30 - PH Added writing of Photoshop:IPTCDigest
+#               2009/01/20 - PH Updated to conform with MWG spec
+#               2009/10/21 - PH Write XMP-xmp:CreateDate as per MWG 1.01 spec
+#
+# References:   http://www.iptc.org/IPTC4XMP/
+#               http://www.iptc.org/IIM/
+#               http://www.adobe.com/products/xmp/pdfs/xmpspec.pdf
+#               http://www.metadataworkinggroup.org/specs/
+#
+# Notes:     1) Also updates Photoshop:IPTCDigest as per MWG recommendation.
+#
+#            2) These arguments will not delete existing XMP tags which are
+#               missing from the IPTC.  The XMP tags should be deleted
+#               beforehand if required.
+#------------------------------------------------------------------------------
+# -XMP-dc:Creator < IPTC:By-line
+# -XMP-dc:Description < IPTC:Caption-Abstract
+# -XMP-dc:Rights < IPTC:CopyrightNotice
+-XMP-dc:Subject < IPTC:Keywords
+-XMP-dc:Title < IPTC:ObjectName
+-XMP-photoshop:AuthorsPosition < IPTC:By-lineTitle
+-XMP-photoshop:CaptionWriter < IPTC:Writer-Editor
+-XMP-photoshop:Category < IPTC:Category
+-XMP-photoshop:City < IPTC:City
+-XMP-photoshop:Country < IPTC:Country-PrimaryLocationName
+-XMP-photoshop:Credit < IPTC:Credit
+# -XMP-photoshop:DateCreated < IPTC:DateCreated
+# overwrite XMP DateCreated to include date and time if available
+# -XMP-photoshop:DateCreated < Composite:DateTimeCreated
+-XMP-photoshop:Headline < IPTC:Headline
+-XMP-photoshop:Instructions < IPTC:SpecialInstructions
+-XMP-photoshop:Source < IPTC:Source
+-XMP-photoshop:State < IPTC:Province-State
+-XMP-photoshop:SupplementalCategories < IPTC:SupplementalCategories
+-XMP-photoshop:TransmissionReference < IPTC:OriginalTransmissionReference
+-XMP-photoshop:Urgency < IPTC:Urgency
+-XMP-iptcCore:CountryCode < IPTC:Country-PrimaryLocationCode
+-XMP-iptcCore:Location < IPTC:Sub-location
+# -XMP-xmp:CreateDate < IPTC:DigitalCreationDate
+# -XMP-xmp:CreateDate < Composite:DigitalCreationDateTime
+# these tags are not free-form text, and may need special handling:
+#-XMP-iptcCore:IntellectualGenre < IPTC:ObjectAttributeReference
+#-XMP-iptcCore:SubjectCode < IPTC:SubjectReference
+-Photoshop:IPTCDigest=new
+# end
+-XMP-xmpMM:History+={action=metadata_sync, when=now, softwareAgent=exiftool_svk-xmp, changed=metadata}
+
