@@ -11,10 +11,50 @@ from .exceptions import ExifToolError, ExifToolNotFoundError
 class ExifToolWrapper:
     """Wrapper class for exiftool operations."""
 
-    def __init__(self, exiftool_path: Optional[str] = None):
-        """Initialize with optional custom exiftool path."""
+    def __init__(self, exiftool_path: Optional[str] = None, persistent: bool = False):
+        """Initialize with optional custom exiftool path and persistent mode."""
         self.exiftool_path = exiftool_path or "exiftool"
+        self.persistent = persistent
+        self._process = None
         self._verify_exiftool()
+        
+        if persistent:
+            self._start_persistent_process()
+
+    def _start_persistent_process(self):
+        """Start a persistent exiftool process."""
+        try:
+            self._process = subprocess.Popen([
+                self.exiftool_path, 
+                '-stay_open', 'True',
+                '-@', '-',  # Read commands from stdin
+                '-common_args',  # Arguments common to all commands
+                '-charset', 'UTF8'  # Ensure UTF-8 output
+            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, 
+               stderr=subprocess.PIPE, text=True, bufsize=0)
+        except Exception as e:
+            raise ExifToolError(f"Failed to start persistent exiftool process: {e}")
+
+    def _stop_persistent_process(self):
+        """Stop the persistent exiftool process."""
+        if self._process:
+            try:
+                self._process.stdin.write('-stay_open\nFalse\n')
+                self._process.stdin.flush()
+                self._process.wait(timeout=5)
+            except Exception:
+                self._process.terminate()
+                self._process.wait()
+            finally:
+                self._process = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self._stop_persistent_process()
 
     def _verify_exiftool(self):
         """Verify that exiftool is available."""
@@ -25,6 +65,13 @@ class ExifToolWrapper:
 
     def _run_command(self, args: List[str]) -> subprocess.CompletedProcess:
         """Run exiftool command with given arguments."""
+        if self.persistent and self._process:
+            return self._run_persistent_command(args)
+        else:
+            return self._run_direct_command(args)
+
+    def _run_direct_command(self, args: List[str]) -> subprocess.CompletedProcess:
+        """Run exiftool command directly (non-persistent mode)."""
         cmd = [self.exiftool_path] + args
         try:
             result = subprocess.run(
@@ -36,6 +83,74 @@ class ExifToolWrapper:
             return result
         except subprocess.CalledProcessError as e:
             raise ExifToolError(f"exiftool command failed: {e.stderr}")
+
+    def _run_persistent_command(self, args: List[str]) -> subprocess.CompletedProcess:
+        """Run exiftool command through persistent process."""
+        if not self._process:
+            raise ExifToolError("Persistent process not available")
+        
+        try:
+            # Send command arguments
+            command = '\n'.join(args) + '\n-execute\n'
+            self._process.stdin.write(command)
+            self._process.stdin.flush()
+            
+            # Read response until we get the ready marker
+            stdout_lines = []
+            stderr_lines = []
+            
+            while True:
+                line = self._process.stdout.readline()
+                if not line:
+                    raise ExifToolError("Persistent process died unexpectedly")
+                
+                line = line.rstrip('\n')
+                if line == '{ready}':
+                    break
+                elif line.startswith('{ready'):
+                    # Sometimes ready comes with extra info
+                    break
+                else:
+                    stdout_lines.append(line)
+            
+            # Read any stderr output (non-blocking)
+            import select
+            import sys
+            if hasattr(select, 'select') and sys.platform != 'win32':
+                # Unix-like systems
+                ready, _, _ = select.select([self._process.stderr], [], [], 0.1)
+                if ready:
+                    while True:
+                        ready, _, _ = select.select([self._process.stderr], [], [], 0.01)
+                        if not ready:
+                            break
+                        line = self._process.stderr.readline()
+                        if line:
+                            stderr_lines.append(line.rstrip('\n'))
+            
+            stdout = '\n'.join(stdout_lines) + ('\n' if stdout_lines else '')
+            stderr = '\n'.join(stderr_lines)
+            
+            # Create a mock CompletedProcess object
+            class MockCompletedProcess:
+                def __init__(self, stdout, stderr, returncode=0):
+                    self.stdout = stdout
+                    self.stderr = stderr
+                    self.returncode = returncode
+            
+            result = MockCompletedProcess(stdout, stderr)
+            
+            # Check for errors in stderr
+            if stderr and 'error' in stderr.lower():
+                raise ExifToolError(f"exiftool command failed: {stderr}")
+                
+            return result
+            
+        except Exception as e:
+            if "Persistent process died" in str(e):
+                self._process = None
+                raise ExifToolError(f"Persistent exiftool process failed: {e}")
+            raise ExifToolError(f"Persistent command execution failed: {e}")
 
     def get_metadata(self, file_path: Union[str, Path]) -> Dict:
         """Extract metadata from a file."""
@@ -348,50 +463,87 @@ class ExifToolWrapper:
         except subprocess.CalledProcessError as e:
             raise ExifToolError(f"File validation failed: {e.stderr}")
 
+    def batch_get_metadata(self, file_paths: List[Union[str, Path]]) -> List[Dict]:
+        """Extract metadata from multiple files efficiently."""
+        if not file_paths:
+            return []
+        
+        # Convert all paths to strings
+        str_paths = [str(Path(p)) for p in file_paths]
+        
+        # Check that all files exist
+        for path in str_paths:
+            if not Path(path).exists():
+                raise FileNotFoundError(f"File not found: {path}")
+        
+        args = ["-j", "-G"] + str_paths
+        result = self._run_command(args)
+        
+        try:
+            metadata_list = json.loads(result.stdout)
+            return metadata_list if metadata_list else []
+        except json.JSONDecodeError as e:
+            raise ExifToolError(f"Failed to parse exiftool output: {e}")
+
+    def batch_extract_xmp_xml(self, file_paths: List[Union[str, Path]]) -> Dict[str, str]:
+        """Extract XMP XML from multiple files efficiently."""
+        if not file_paths:
+            return {}
+        
+        results = {}
+        
+        # For batch operations, we need to process files individually for XMP
+        # because exiftool doesn't provide a clean way to separate XMP output for multiple files
+        for file_path in file_paths:
+            try:
+                xmp_xml = self.extract_xmp_xml(file_path)
+                results[str(file_path)] = xmp_xml
+            except Exception as e:
+                results[str(file_path)] = ""  # Empty string for files with no XMP or errors
+        
+        return results
+
     def extract_xmp_packet(self, file_path: Union[str, Path]) -> str:
-        """Extract full XMP packet (with <?xpacket> declarations) from a file."""
+        """Extract full XMP packet (use temporary file approach to get properly formatted packet)."""
+        import tempfile
+        import os
+        
         file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        # Use -XMP to extract XMP metadata directly
-        args = ["-XMP", "-b", str(file_path)]
+        # Create temporary XMP file using -tagsfromfile approach
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.xmp', delete=False) as temp_file:
+            temp_xmp_path = temp_file.name
+
         try:
-            cmd = [self.exiftool_path] + args
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                check=False  # Don't raise on non-zero exit
-            )
+            # Use -tagsfromfile to write XMP to temporary file
+            args = ["-tagsfromfile", str(file_path), "-xmp", temp_xmp_path]
+            result = self._run_command(args)
             
-            # Check if command was successful or if there's just no XMP
-            if result.returncode != 0:
-                if "no xmp" in result.stderr.lower() or not result.stdout.strip():
-                    return ""
-                raise ExifToolError(f"exiftool command failed: {result.stderr}")
-            
-            return result.stdout
-        except subprocess.CalledProcessError as e:
-            raise ExifToolError(f"exiftool command failed: {e.stderr}")
-        except UnicodeDecodeError:
-            # If UTF-8 fails, try with different approach
-            try:
-                cmd = [self.exiftool_path] + args
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=False,  # Get bytes
-                    check=False
-                )
-                if result.returncode != 0:
-                    return ""
-                # Decode with error handling
-                return result.stdout.decode('utf-8', errors='replace')
-            except Exception:
+            # Read the generated XMP file
+            if os.path.exists(temp_xmp_path) and os.path.getsize(temp_xmp_path) > 0:
+                with open(temp_xmp_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+                
+                # Clean up excessive whitespace before the end packet
+                import re
+                # Replace multiple whitespace characters before <?xpacket end with just a newline
+                content = re.sub(r'\s+(?=<\?xpacket end)', '\n', content)
+                
+                return content
+            else:
                 return ""
+            
+        except ExifToolError as e:
+            # Check if error is because no XMP data exists  
+            if "no xmp" in str(e).lower() or "warning" in str(e).lower():
+                return ""
+            raise e
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_xmp_path):
+                os.unlink(temp_xmp_path)
 
     def extract_xmp_xml(self, file_path: Union[str, Path]) -> str:
         """Extract clean XMP XML (just <x:xmpmeta> content) from a file."""

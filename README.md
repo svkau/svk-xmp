@@ -70,6 +70,7 @@ svk-xmp xmp path/to/image.jpg --format raw       # Raw XML output
 svk-xmp xmp path/to/image.jpg --format json      # JSON output
 svk-xmp xmp path/to/image.jpg --save output.xmp  # Save XMP packet to file
 svk-xmp xmp /path/to/directory --recursive       # Process directory recursively
+svk-xmp xmp /path/to/directory --save xmp_files  # Save individual .xmp files for each image
 
 # Custom exiftool path
 svk-xmp --exiftool-path /custom/path/exiftool extract image.jpg
@@ -185,6 +186,18 @@ The parser extracts key Dublin Core fields commonly used in image metadata:
 2. **Raw XML format**: Clean XMP XML suitable for integration into XML documents  
 3. **JSON format**: Structured data with both parsed fields and raw XML
 4. **Save to file**: Full XMP packet with `<?xpacket>` declarations for .xmp files
+
+### Saving XMP Files
+
+The `--save` option behavior depends on the input:
+
+- **Single file**: `svk-xmp xmp photo.jpg --save metadata.xmp` → saves to `metadata.xmp`
+- **Directory**: `svk-xmp xmp photos/ --save xmp_output` → creates `xmp_output/` directory with individual `.xmp` files for each image:
+  - `photos/IMG_001.jpg` → `xmp_output/IMG_001.xmp`
+  - `photos/IMG_002.jpg` → `xmp_output/IMG_002.xmp`
+  - etc.
+
+The output directory is created automatically if it doesn't exist.
 
 ### Example XMP Output
 

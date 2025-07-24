@@ -903,7 +903,7 @@ class TestMetadataProcessor:
 
     @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
     def test_batch_extract_xmp_success(self, mock_exiftool):
-        """Test batch XMP extraction."""
+        """Test batch XMP extraction (non-persistent mode)."""
         mock_instance = mock_exiftool.return_value
         
         # Mock file discovery
@@ -921,7 +921,8 @@ class TestMetadataProcessor:
         
         with patch.object(processor, 'extract_xmp_xml', side_effect=mock_extract_xmp_xml):
             with patch.object(processor, 'parse_xmp_fields', return_value={'title': 'Title 1'}):
-                result = processor.batch_extract_xmp('/test/dir')
+                # Use non-persistent mode to avoid persistent wrapper mocking complexity
+                result = processor.batch_extract_xmp('/test/dir', use_persistent=False)
         
         assert result['summary']['total_files'] == 2
         assert result['summary']['processed'] == 1
@@ -931,7 +932,7 @@ class TestMetadataProcessor:
 
     @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
     def test_batch_extract_xmp_with_errors(self, mock_exiftool):
-        """Test batch XMP extraction with errors."""
+        """Test batch XMP extraction with errors (non-persistent mode)."""
         mock_instance = mock_exiftool.return_value
         
         test_files = [Path('test1.jpg'), Path('test2.jpg')]
@@ -948,10 +949,114 @@ class TestMetadataProcessor:
         
         with patch.object(processor, 'extract_xmp_xml', side_effect=mock_extract_xmp_xml):
             with patch.object(processor, 'parse_xmp_fields', return_value={'title': 'Test'}):
-                result = processor.batch_extract_xmp('/test/dir')
+                # Use non-persistent mode to avoid persistent wrapper mocking complexity
+                result = processor.batch_extract_xmp('/test/dir', use_persistent=False)
         
         assert result['summary']['total_files'] == 2
         assert result['summary']['processed'] == 1
         assert result['summary']['errors'] == 1
         assert len(result['processed']) == 1
         assert len(result['errors']) == 1
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_persistent_mode_context_manager(self, mock_which):
+        """Test persistent mode as context manager."""
+        with patch('subprocess.Popen') as mock_popen:
+            mock_process = Mock()
+            mock_process.stdin = Mock()
+            mock_process.stdout = Mock()
+            mock_process.stderr = Mock()
+            mock_popen.return_value = mock_process
+            
+            with ExifToolWrapper(persistent=True) as wrapper:
+                assert wrapper.persistent is True
+                assert wrapper._process is not None
+                mock_popen.assert_called_once()
+            
+            # Verify process was terminated
+            mock_process.stdin.write.assert_called()
+            mock_process.stdin.flush.assert_called()
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_batch_get_metadata(self, mock_which):
+        """Test batch metadata extraction."""
+        wrapper = ExifToolWrapper()
+        
+        mock_result = Mock()
+        mock_result.stdout = json.dumps([
+            {'File:FileName': 'test1.jpg', 'EXIF:Make': 'Canon'},
+            {'File:FileName': 'test2.jpg', 'EXIF:Make': 'Nikon'}
+        ])
+        
+        with patch.object(wrapper, '_run_command', return_value=mock_result):
+            with patch('pathlib.Path.exists', return_value=True):
+                results = wrapper.batch_get_metadata(['test1.jpg', 'test2.jpg'])
+                
+                assert len(results) == 2
+                assert results[0]['EXIF:Make'] == 'Canon'
+                assert results[1]['EXIF:Make'] == 'Nikon'
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_batch_extract_xmp_xml(self, mock_which):
+        """Test batch XMP XML extraction."""
+        wrapper = ExifToolWrapper()
+        
+        def mock_extract_xmp_xml(file_path):
+            if 'test1' in str(file_path):
+                return '<x:xmpmeta>test1 content</x:xmpmeta>'
+            else:
+                return '<x:xmpmeta>test2 content</x:xmpmeta>'
+        
+        with patch.object(wrapper, 'extract_xmp_xml', side_effect=mock_extract_xmp_xml):
+            results = wrapper.batch_extract_xmp_xml(['test1.jpg', 'test2.jpg'])
+            
+            assert len(results) == 2
+            assert 'test1 content' in results['test1.jpg']
+            assert 'test2 content' in results['test2.jpg']
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_processor_batch_extract_xmp_persistent_mode(self, mock_exiftool_class):
+        """Test MetadataProcessor batch XMP extraction with persistent mode."""
+        # Mock the regular wrapper
+        mock_regular_wrapper = Mock()
+        mock_regular_wrapper.exiftool_path = 'exiftool'
+        mock_regular_wrapper._get_files_to_process.return_value = [Path('test1.jpg'), Path('test2.jpg')]
+        mock_exiftool_class.return_value = mock_regular_wrapper
+        
+        # Mock the persistent wrapper
+        mock_persistent_wrapper = Mock()
+        mock_persistent_wrapper.batch_extract_xmp_xml.return_value = {
+            'test1.jpg': '<x:xmpmeta>content1</x:xmpmeta>',
+            'test2.jpg': '<x:xmpmeta>content2</x:xmpmeta>'
+        }
+        
+        # Mock the context manager
+        mock_exiftool_class.return_value.__enter__ = Mock(return_value=mock_persistent_wrapper)
+        mock_exiftool_class.return_value.__exit__ = Mock(return_value=None)
+        
+        processor = MetadataProcessor()
+        
+        with patch.object(processor, 'parse_xmp_fields', return_value={'title': 'Test'}):
+            result = processor.batch_extract_xmp('/test/dir', use_persistent=True)
+        
+        assert result['summary']['total_files'] == 2
+        assert result['summary']['processed'] == 2
+        assert len(result['processed']) == 2
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_processor_batch_extract_xmp_fallback_to_individual(self, mock_exiftool_class):
+        """Test MetadataProcessor falls back to individual processing for single files."""
+        mock_wrapper = Mock()
+        mock_wrapper.exiftool_path = 'exiftool'
+        mock_wrapper._get_files_to_process.return_value = [Path('single.jpg')]
+        mock_exiftool_class.return_value = mock_wrapper
+        
+        processor = MetadataProcessor()
+        
+        with patch.object(processor, 'extract_xmp_xml', return_value='<x:xmpmeta>content</x:xmpmeta>'):
+            with patch.object(processor, 'parse_xmp_fields', return_value={'title': 'Test'}):
+                result = processor.batch_extract_xmp('/test/dir', use_persistent=True)
+        
+        # Should use individual processing for single file
+        assert result['summary']['total_files'] == 1
+        assert result['summary']['processed'] == 1

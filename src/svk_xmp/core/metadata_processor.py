@@ -212,9 +212,10 @@ class MetadataProcessor:
         self, 
         path: Union[str, Path], 
         recursive: bool = False,
-        progress_callback: Optional[Callable[[str, int, int], None]] = None
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        use_persistent: bool = True
     ) -> Dict[str, Any]:
-        """Batch XMP extraction with progress tracking."""
+        """Batch XMP extraction with progress tracking and optional persistent mode."""
         path = Path(path)
         
         # Initialize result structure similar to sync_metadata
@@ -235,54 +236,100 @@ class MetadataProcessor:
         files_to_process = self.exiftool._get_files_to_process(path, file_extensions, recursive)
         result['summary']['total_files'] = len(files_to_process)
         
-        # Process each file
-        for index, file_path in enumerate(files_to_process):
-            if progress_callback:
-                progress_callback(str(file_path), index, len(files_to_process))
+        # Filter out unsupported files first
+        valid_files = []
+        for file_path in files_to_process:
+            if file_path.suffix.lower() == '.zip':
+                result['skipped'].append({
+                    'file': str(file_path),
+                    'reason': 'ZIP files not supported'
+                })
+                result['summary']['skipped'] += 1
+                continue
             
-            try:
-                # Skip zip files and unsupported types
-                if file_path.suffix.lower() == '.zip':
-                    result['skipped'].append({
-                        'file': str(file_path),
-                        'reason': 'ZIP files not supported'
-                    })
-                    result['summary']['skipped'] += 1
-                    continue
-                
-                if file_path.suffix.lower() not in file_extensions:
-                    result['skipped'].append({
-                        'file': str(file_path),
-                        'reason': 'Unsupported file type'
-                    })
-                    result['summary']['skipped'] += 1
-                    continue
-                
-                # Extract XMP
-                xmp_xml = self.extract_xmp_xml(file_path)
-                if not xmp_xml:
-                    result['skipped'].append({
-                        'file': str(file_path),
-                        'reason': 'No XMP metadata found'
-                    })
-                    result['summary']['skipped'] += 1
-                    continue
-                
-                # Parse fields
-                fields = self.parse_xmp_fields(xmp_xml)
-                
-                result['processed'].append({
+            if file_path.suffix.lower() not in file_extensions:
+                result['skipped'].append({
                     'file': str(file_path),
-                    'xmp_xml': xmp_xml,
-                    'fields': fields
+                    'reason': 'Unsupported file type'
                 })
-                result['summary']['processed'] += 1
+                result['summary']['skipped'] += 1
+                continue
+            
+            valid_files.append(file_path)
+        
+        if not valid_files:
+            return result
+        
+        # Use persistent mode for batch processing if requested and we have multiple files
+        if use_persistent and len(valid_files) > 1:
+            with ExifToolWrapper(self.exiftool.exiftool_path, persistent=True) as persistent_wrapper:
+                # Batch extract XMP XML from all files
+                xmp_results = persistent_wrapper.batch_extract_xmp_xml(valid_files)
                 
-            except Exception as e:
-                result['errors'].append({
-                    'file': str(file_path),
-                    'error': str(e)
-                })
-                result['summary']['errors'] += 1
+                # Process results
+                for index, file_path in enumerate(valid_files):
+                    if progress_callback:
+                        progress_callback(str(file_path), index, len(valid_files))
+                    
+                    try:
+                        xmp_xml = xmp_results.get(str(file_path), "")
+                        
+                        if not xmp_xml:
+                            result['skipped'].append({
+                                'file': str(file_path),
+                                'reason': 'No XMP metadata found'
+                            })
+                            result['summary']['skipped'] += 1
+                            continue
+                        
+                        # Parse fields
+                        fields = self.parse_xmp_fields(xmp_xml)
+                        
+                        result['processed'].append({
+                            'file': str(file_path),
+                            'xmp_xml': xmp_xml,
+                            'fields': fields
+                        })
+                        result['summary']['processed'] += 1
+                        
+                    except Exception as e:
+                        result['errors'].append({
+                            'file': str(file_path),
+                            'error': str(e)
+                        })
+                        result['summary']['errors'] += 1
+        else:
+            # Process files individually (non-persistent mode or single file)
+            for index, file_path in enumerate(valid_files):
+                if progress_callback:
+                    progress_callback(str(file_path), index, len(valid_files))
+                
+                try:
+                    # Extract XMP
+                    xmp_xml = self.extract_xmp_xml(file_path)
+                    if not xmp_xml:
+                        result['skipped'].append({
+                            'file': str(file_path),
+                            'reason': 'No XMP metadata found'
+                        })
+                        result['summary']['skipped'] += 1
+                        continue
+                    
+                    # Parse fields
+                    fields = self.parse_xmp_fields(xmp_xml)
+                    
+                    result['processed'].append({
+                        'file': str(file_path),
+                        'xmp_xml': xmp_xml,
+                        'fields': fields
+                    })
+                    result['summary']['processed'] += 1
+                    
+                except Exception as e:
+                    result['errors'].append({
+                        'file': str(file_path),
+                        'error': str(e)
+                    })
+                    result['summary']['errors'] += 1
         
         return result

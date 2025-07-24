@@ -153,7 +153,7 @@ def sync(ctx, path, args_file, extensions, recursive, verbose, format):
 @click.option('--recursive/--no-recursive', '-r/-R', default=False,
               help='Process subdirectories recursively')
 @click.option('--save', '-s', type=click.Path(), 
-              help='Save XMP packet to file (includes <?xpacket> declarations)')
+              help='Save XMP packets: for single file, save to specified file; for directory, save individual .xmp files to specified directory')
 @click.option('--format', '-f', type=click.Choice(['table', 'raw', 'json']), default='table',
               help='Output format: table (key fields), raw (XML), json (structured data)')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
@@ -219,45 +219,88 @@ def xmp(ctx, path, recursive, save, format, verbose):
         
         else:
             # Directory processing
-            result = processor.batch_extract_xmp(path, recursive)
-            
-            if format == 'json':
-                import json
-                click.echo(json.dumps(result, indent=2))
-            elif format == 'raw':
+            if save:
+                # Save XMP files for directory processing
+                save_path = Path(save)
+                
+                # Create output directory if it doesn't exist
+                if not save_path.exists():
+                    save_path.mkdir(parents=True, exist_ok=True)
+                elif not save_path.is_dir():
+                    click.echo(f"Error: {save} is not a directory", err=True)
+                    raise click.Abort()
+                
+                result = processor.batch_extract_xmp(path, recursive)
+                saved_count = 0
+                
                 for item in result['processed']:
-                    click.echo(f"\n--- {item['file']} ---")
-                    click.echo(item['xmp_xml'])
-            else:  # table format
-                if result['processed']:
-                    for item in result['processed']:
-                        fields = item['fields']
-                        click.echo(f"\nFile: {item['file']}")
-                        click.echo("=" * (len(item['file']) + 6))
-                        for key, value in fields.items():
-                            if value:
-                                display_key = key.replace('_', ' ').title()
-                                if len(value) > 60:
-                                    value = value[:57] + "..."
-                                click.echo(f"{display_key:<15}: {value}")
+                    source_file = Path(item['file'])
+                    # Create .xmp filename based on source filename
+                    xmp_filename = source_file.stem + '.xmp'
+                    xmp_path = save_path / xmp_filename
+                    
+                    # Get the full XMP packet for saving
+                    try:
+                        xmp_packet = processor.extract_xmp_packet(item['file'])
+                        if xmp_packet:
+                            with open(xmp_path, 'w', encoding='utf-8') as f:
+                                f.write(xmp_packet)
+                            saved_count += 1
+                            if verbose:
+                                click.echo(f"Saved: {xmp_path}")
+                    except Exception as e:
+                        if verbose:
+                            click.echo(f"Error saving {source_file}: {e}")
                 
                 # Summary
-                summary = result['summary']
-                click.echo(f"\nSummary:")
-                click.echo(f"  Total files: {summary['total_files']}")
-                click.echo(f"  Processed: {summary['processed']}")
-                click.echo(f"  Skipped: {summary['skipped']} (no XMP metadata)")
-                click.echo(f"  Errors: {summary['errors']}")
+                click.echo(f"XMP extraction completed:")
+                click.echo(f"  Total files processed: {result['summary']['total_files']}")
+                click.echo(f"  XMP files saved: {saved_count}")
+                click.echo(f"  Skipped (no XMP): {result['summary']['skipped']}")
+                click.echo(f"  Errors: {result['summary']['errors']}")
+                click.echo(f"  Output directory: {save_path}")
                 
-                if verbose and result['skipped']:
-                    click.echo(f"\nSkipped files:")
-                    for skipped in result['skipped']:
-                        click.echo(f"  {skipped['file']}: {skipped['reason']}")
+            else:
+                # Regular directory processing without saving
+                result = processor.batch_extract_xmp(path, recursive)
                 
-                if verbose and result['errors']:
-                    click.echo(f"\nErrors:")
-                    for error in result['errors']:
-                        click.echo(f"  {error['file']}: {error['error']}")
+                if format == 'json':
+                    import json
+                    click.echo(json.dumps(result, indent=2))
+                elif format == 'raw':
+                    for item in result['processed']:
+                        click.echo(f"\n--- {item['file']} ---")
+                        click.echo(item['xmp_xml'])
+                else:  # table format
+                    if result['processed']:
+                        for item in result['processed']:
+                            fields = item['fields']
+                            click.echo(f"\nFile: {item['file']}")
+                            click.echo("=" * (len(item['file']) + 6))
+                            for key, value in fields.items():
+                                if value:
+                                    display_key = key.replace('_', ' ').title()
+                                    if len(value) > 60:
+                                        value = value[:57] + "..."
+                                    click.echo(f"{display_key:<15}: {value}")
+                    
+                    # Summary
+                    summary = result['summary']
+                    click.echo(f"\nSummary:")
+                    click.echo(f"  Total files: {summary['total_files']}")
+                    click.echo(f"  Processed: {summary['processed']}")
+                    click.echo(f"  Skipped: {summary['skipped']} (no XMP metadata)")
+                    click.echo(f"  Errors: {summary['errors']}")
+                    
+                    if verbose and result['skipped']:
+                        click.echo(f"\nSkipped files:")
+                        for skipped in result['skipped']:
+                            click.echo(f"  {skipped['file']}: {skipped['reason']}")
+                    
+                    if verbose and result['errors']:
+                        click.echo(f"\nErrors:")
+                        for error in result['errors']:
+                            click.echo(f"  {error['file']}: {error['error']}")
 
     except MyProjectError as e:
         click.echo(f"Error: {e}", err=True)
