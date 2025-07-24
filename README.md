@@ -5,13 +5,14 @@ A metadata processing tool that provides a high-level interface for working with
 ## Features
 
 - **Extract metadata** from images in various formats
+- **Extract XMP metadata** with support for Dublin Core fields (Title, Description, Creator, Keywords, Date Created)
 - **Remove metadata** selectively or completely
 - **Scan directories** for files lacking metadata
 - **Synchronize metadata** between EXIF, IPTC, and XMP formats
 - **Multiple interfaces**: Command-line, Python library, and web API
 - **Batch processing** with progress tracking and detailed reporting
 - **File validation** using exiftool's built-in validation
-- **Flexible output formats** (JSON, table, summary)
+- **Flexible output formats** (JSON, table, raw XML, summary)
 
 ## Prerequisites
 
@@ -63,6 +64,13 @@ svk-xmp sync path/to/image.jpg --verbose
 svk-xmp sync /path/to/directory --recursive
 svk-xmp sync /path/to/images --extensions .jpg --extensions .tiff
 
+# Extract XMP metadata
+svk-xmp xmp path/to/image.jpg                    # Table format (default)
+svk-xmp xmp path/to/image.jpg --format raw       # Raw XML output
+svk-xmp xmp path/to/image.jpg --format json      # JSON output
+svk-xmp xmp path/to/image.jpg --save output.xmp  # Save XMP packet to file
+svk-xmp xmp /path/to/directory --recursive       # Process directory recursively
+
 # Custom exiftool path
 svk-xmp --exiftool-path /custom/path/exiftool extract image.jpg
 ```
@@ -89,6 +97,20 @@ print(f"Processed: {result['summary']['processed']} files")
 
 # Scan for files without metadata
 files = processor.find_files_without_metadata('/path/to/directory')
+
+# Extract XMP metadata
+xmp_xml = processor.extract_xmp_xml('image.jpg')
+xmp_packet = processor.extract_xmp_packet('image.jpg')  # Includes <?xpacket> declarations
+
+# Parse XMP fields for display
+fields = processor.parse_xmp_fields(xmp_xml)
+print(f"Title: {fields['title']}")
+print(f"Creator: {fields['creator']}")
+print(f"Keywords: {fields['keywords']}")
+
+# Batch XMP extraction
+result = processor.batch_extract_xmp('/path/to/directory', recursive=True)
+print(f"Found XMP data in {result['summary']['processed']} files")
 ```
 
 ### Web API
@@ -102,8 +124,10 @@ python -m flask --app src.svk_xmp.web.app run
 ```
 
 API endpoints:
-- `GET /health` - Health check
+- `GET /` - Health check
 - `POST /process` - Process metadata operations
+- `GET /xmp?file=path&format=json|xml|both` - Extract XMP from single file
+- `POST /xmp/batch` - Batch XMP extraction with JSON payload: `{"path": "/dir", "recursive": true, "format": "json"}`
 
 ## Metadata Synchronization
 
@@ -139,6 +163,60 @@ Metadata synchronization completed:
   Errors: 0
   Warnings: 12
   Skipped: 2
+```
+
+## XMP Metadata Extraction
+
+The XMP extraction functionality provides comprehensive access to XMP metadata embedded in images, with support for Dublin Core and other XMP namespaces.
+
+### Supported XMP Fields
+
+The parser extracts key Dublin Core fields commonly used in image metadata:
+
+- **Title** (`dc:title`): Image title or heading
+- **Description** (`dc:description`): Image description or caption  
+- **Creator** (`dc:creator`): Image creator or author
+- **Keywords** (`dc:subject`): Comma-separated keywords/tags
+- **Date Created** (`xmp:CreateDate` or `photoshop:DateCreated`): Creation timestamp
+
+### XMP Output Formats
+
+1. **Table format** (default): Human-readable key-value pairs showing populated fields
+2. **Raw XML format**: Clean XMP XML suitable for integration into XML documents  
+3. **JSON format**: Structured data with both parsed fields and raw XML
+4. **Save to file**: Full XMP packet with `<?xpacket>` declarations for .xmp files
+
+### Example XMP Output
+
+**Table format:**
+```bash
+$ svk-xmp xmp photo.jpg
+
+File: photo.jpg
+===============
+Title          : Summer Sunset
+Description    : Beautiful sunset over the ocean
+Creator        : John Photographer  
+Keywords       : sunset, ocean, landscape
+Date Created   : 2023-07-15T19:30:00Z
+```
+
+**Raw XML format:**
+```bash
+$ svk-xmp xmp photo.jpg --format raw
+
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about=''
+  xmlns:dc='http://purl.org/dc/elements/1.1/'>
+  <dc:title>
+   <rdf:Alt>
+    <rdf:li xml:lang='x-default'>Summer Sunset</rdf:li>
+   </rdf:Alt>
+  </dc:title>
+ </rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
 ```
 
 ## Limitations
@@ -212,6 +290,10 @@ The MIT License allows you to use, copy, modify, merge, publish, distribute, sub
 ## Changelog
 
 ### Latest Features
+- ✅ **XMP metadata extraction** with Dublin Core field parsing (Title, Description, Creator, Keywords, Date Created)
+- ✅ **Multiple XMP output formats**: Table view, raw XML, JSON, and save to .xmp files
+- ✅ **Batch XMP processing** with recursive directory support
+- ✅ **XMP Web API endpoints** for single file and batch operations
 - ✅ Metadata synchronization between EXIF, IPTC, and XMP
 - ✅ Comprehensive CLI interface with all sync options
 - ✅ File validation and error handling

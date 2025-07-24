@@ -124,3 +124,165 @@ class MetadataProcessor:
             )
         except Exception as e:
             raise MetadataProcessingError(f"Failed to sync metadata: {str(e)}")
+
+    def extract_xmp_xml(self, file_path: Union[str, Path]) -> str:
+        """Extract clean XMP XML from a file."""
+        try:
+            return self.exiftool.extract_xmp_xml(file_path)
+        except Exception as e:
+            raise MetadataProcessingError(f"Failed to extract XMP: {str(e)}")
+
+    def extract_xmp_packet(self, file_path: Union[str, Path]) -> str:
+        """Extract full XMP packet from a file."""
+        try:
+            return self.exiftool.extract_xmp_packet(file_path)
+        except Exception as e:
+            raise MetadataProcessingError(f"Failed to extract XMP packet: {str(e)}")
+
+    def parse_xmp_fields(self, xmp_xml: str) -> Dict[str, str]:
+        """Parse key XMP fields for tabular display."""
+        if not xmp_xml:
+            return {}
+        
+        import xml.etree.ElementTree as ET
+        import re
+        
+        fields = {
+            'title': '',
+            'description': '',
+            'date_created': '',
+            'creator': '',
+            'keywords': ''
+        }
+        
+        try:
+            # Parse XML
+            root = ET.fromstring(xmp_xml)
+            
+            # Define namespaces
+            namespaces = {
+                'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+                'dc': 'http://purl.org/dc/elements/1.1/',
+                'xmp': 'http://ns.adobe.com/xap/1.0/',
+                'photoshop': 'http://ns.adobe.com/photoshop/1.0/'
+            }
+            
+            # Find Description elements
+            descriptions = root.findall('.//rdf:Description', namespaces)
+            
+            for desc in descriptions:
+                # Title (dc:title)
+                title_elem = desc.find('.//dc:title/rdf:Alt/rdf:li', namespaces)
+                if title_elem is not None and title_elem.text:
+                    fields['title'] = title_elem.text
+                
+                # Description (dc:description)
+                desc_elem = desc.find('.//dc:description/rdf:Alt/rdf:li', namespaces)
+                if desc_elem is not None and desc_elem.text:
+                    fields['description'] = desc_elem.text
+                
+                # Date Created (xmp:CreateDate or photoshop:DateCreated)
+                date_elem = desc.find('.//xmp:CreateDate', namespaces)
+                if date_elem is None:
+                    date_elem = desc.find('.//photoshop:DateCreated', namespaces)
+                if date_elem is not None and date_elem.text:
+                    fields['date_created'] = date_elem.text
+                
+                # Creator (dc:creator)
+                creator_elem = desc.find('.//dc:creator/rdf:Seq/rdf:li', namespaces)
+                if creator_elem is not None and creator_elem.text:
+                    fields['creator'] = creator_elem.text
+                
+                # Keywords (dc:subject)
+                keywords = []
+                keyword_elems = desc.findall('.//dc:subject/rdf:Bag/rdf:li', namespaces)
+                for kw_elem in keyword_elems:
+                    if kw_elem.text:
+                        keywords.append(kw_elem.text)
+                if keywords:
+                    fields['keywords'] = ', '.join(keywords)
+        
+        except ET.ParseError:
+            # If XML parsing fails, return empty fields
+            pass
+        
+        return fields
+
+    def batch_extract_xmp(
+        self, 
+        path: Union[str, Path], 
+        recursive: bool = False,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None
+    ) -> Dict[str, Any]:
+        """Batch XMP extraction with progress tracking."""
+        path = Path(path)
+        
+        # Initialize result structure similar to sync_metadata
+        result = {
+            'processed': [],
+            'errors': [],
+            'skipped': [],
+            'summary': {
+                'total_files': 0,
+                'processed': 0,
+                'errors': 0,
+                'skipped': 0
+            }
+        }
+        
+        # Get list of files to process
+        file_extensions = ['.jpg', '.jpeg', '.jpe', '.tif', '.tiff', '.png', '.gif', '.bmp', '.webp']
+        files_to_process = self.exiftool._get_files_to_process(path, file_extensions, recursive)
+        result['summary']['total_files'] = len(files_to_process)
+        
+        # Process each file
+        for index, file_path in enumerate(files_to_process):
+            if progress_callback:
+                progress_callback(str(file_path), index, len(files_to_process))
+            
+            try:
+                # Skip zip files and unsupported types
+                if file_path.suffix.lower() == '.zip':
+                    result['skipped'].append({
+                        'file': str(file_path),
+                        'reason': 'ZIP files not supported'
+                    })
+                    result['summary']['skipped'] += 1
+                    continue
+                
+                if file_path.suffix.lower() not in file_extensions:
+                    result['skipped'].append({
+                        'file': str(file_path),
+                        'reason': 'Unsupported file type'
+                    })
+                    result['summary']['skipped'] += 1
+                    continue
+                
+                # Extract XMP
+                xmp_xml = self.extract_xmp_xml(file_path)
+                if not xmp_xml:
+                    result['skipped'].append({
+                        'file': str(file_path),
+                        'reason': 'No XMP metadata found'
+                    })
+                    result['summary']['skipped'] += 1
+                    continue
+                
+                # Parse fields
+                fields = self.parse_xmp_fields(xmp_xml)
+                
+                result['processed'].append({
+                    'file': str(file_path),
+                    'xmp_xml': xmp_xml,
+                    'fields': fields
+                })
+                result['summary']['processed'] += 1
+                
+            except Exception as e:
+                result['errors'].append({
+                    'file': str(file_path),
+                    'error': str(e)
+                })
+                result['summary']['errors'] += 1
+        
+        return result

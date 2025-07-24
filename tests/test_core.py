@@ -728,3 +728,230 @@ class TestMetadataProcessor:
             processor.sync_metadata('test.jpg')
         
         assert "Failed to sync metadata: exiftool command failed" in str(exc_info.value)
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_extract_xmp_packet_success(self, mock_which):
+        """Test successful XMP packet extraction."""
+        wrapper = ExifToolWrapper()
+        
+        mock_xmp_content = '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Image::ExifTool 12.76">\n<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n<rdf:Description rdf:about=""\n  xmlns:dc="http://purl.org/dc/elements/1.1/">\n  <dc:title>\n   <rdf:Alt>\n    <rdf:li xml:lang="x-default">Test Title</rdf:li>\n   </rdf:Alt>\n  </dc:title>\n</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end="w"?>'
+        
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = mock_xmp_content
+        mock_result.stderr = ""
+        
+        with patch('subprocess.run', return_value=mock_result):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = wrapper.extract_xmp_packet('test.jpg')
+                assert result == mock_xmp_content
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_extract_xmp_packet_no_xmp(self, mock_which):
+        """Test XMP packet extraction when no XMP exists."""
+        wrapper = ExifToolWrapper()
+        
+        mock_result = Mock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "No XMP data found"
+        
+        with patch('subprocess.run', return_value=mock_result):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = wrapper.extract_xmp_packet('test.jpg')
+                assert result == ""
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_extract_xmp_packet_file_not_found(self, mock_which):
+        """Test XMP packet extraction with non-existent file."""
+        wrapper = ExifToolWrapper()
+        
+        with pytest.raises(FileNotFoundError):
+            wrapper.extract_xmp_packet('nonexistent.jpg')
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_extract_xmp_xml_success(self, mock_which):
+        """Test successful XMP XML extraction."""
+        wrapper = ExifToolWrapper()
+        
+        mock_xmp_packet = '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Image::ExifTool 12.76">\n<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n<rdf:Description rdf:about=""\n  xmlns:dc="http://purl.org/dc/elements/1.1/">\n  <dc:title>\n   <rdf:Alt>\n    <rdf:li xml:lang="x-default">Test Title</rdf:li>\n   </rdf:Alt>\n  </dc:title>\n</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end="w"?>'
+        expected_xml = '<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Image::ExifTool 12.76">\n<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n<rdf:Description rdf:about=""\n  xmlns:dc="http://purl.org/dc/elements/1.1/">\n  <dc:title>\n   <rdf:Alt>\n    <rdf:li xml:lang="x-default">Test Title</rdf:li>\n   </rdf:Alt>\n  </dc:title>\n</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>'
+        
+        with patch.object(wrapper, 'extract_xmp_packet', return_value=mock_xmp_packet):
+            result = wrapper.extract_xmp_xml('test.jpg')
+            assert result == expected_xml
+
+    @patch('shutil.which', return_value='/usr/bin/exiftool')
+    def test_extract_xmp_xml_no_xmp(self, mock_which):
+        """Test XMP XML extraction when no XMP exists."""
+        wrapper = ExifToolWrapper()
+        
+        with patch.object(wrapper, 'extract_xmp_packet', return_value=""):
+            result = wrapper.extract_xmp_xml('test.jpg')
+            assert result == ""
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_processor_extract_xmp_xml_success(self, mock_exiftool):
+        """Test MetadataProcessor XMP XML extraction."""
+        mock_instance = mock_exiftool.return_value
+        mock_xml = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Test Title</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>'
+        mock_instance.extract_xmp_xml.return_value = mock_xml
+        
+        processor = MetadataProcessor()
+        result = processor.extract_xmp_xml('test.jpg')
+        
+        assert result == mock_xml
+        mock_instance.extract_xmp_xml.assert_called_once_with('test.jpg')
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_processor_extract_xmp_packet_success(self, mock_exiftool):
+        """Test MetadataProcessor XMP packet extraction."""
+        mock_instance = mock_exiftool.return_value
+        mock_packet = '<?xpacket begin="\ufeff"?><x:xmpmeta>content</x:xmpmeta><?xpacket end="w"?>'
+        mock_instance.extract_xmp_packet.return_value = mock_packet
+        
+        processor = MetadataProcessor()
+        result = processor.extract_xmp_packet('test.jpg')
+        
+        assert result == mock_packet
+        mock_instance.extract_xmp_packet.assert_called_once_with('test.jpg')
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_processor_extract_xmp_error_handling(self, mock_exiftool):
+        """Test MetadataProcessor XMP extraction error handling."""
+        mock_instance = mock_exiftool.return_value
+        mock_instance.extract_xmp_xml.side_effect = Exception("Exiftool failed")
+        
+        processor = MetadataProcessor()
+        
+        with pytest.raises(MetadataProcessingError) as exc_info:
+            processor.extract_xmp_xml('test.jpg')
+        
+        assert "Failed to extract XMP: Exiftool failed" in str(exc_info.value)
+
+    def test_parse_xmp_fields_success(self):
+        """Test XMP field parsing."""
+        processor = MetadataProcessor()
+        
+        xmp_xml = '''<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Image::ExifTool 12.76">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+         <rdf:Description rdf:about=""
+          xmlns:dc="http://purl.org/dc/elements/1.1/"
+          xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+          xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+          <dc:title>
+           <rdf:Alt>
+            <rdf:li xml:lang="x-default">Test Title</rdf:li>
+           </rdf:Alt>
+          </dc:title>
+          <dc:description>
+           <rdf:Alt>
+            <rdf:li xml:lang="x-default">Test Description</rdf:li>
+           </rdf:Alt>
+          </dc:description>
+          <xmp:CreateDate>2023-01-01T12:00:00Z</xmp:CreateDate>
+          <dc:creator>
+           <rdf:Seq>
+            <rdf:li>Test Creator</rdf:li>
+           </rdf:Seq>
+          </dc:creator>
+          <dc:subject>
+           <rdf:Bag>
+            <rdf:li>keyword1</rdf:li>
+            <rdf:li>keyword2</rdf:li>
+           </rdf:Bag>
+          </dc:subject>
+         </rdf:Description>
+        </rdf:RDF>
+        </x:xmpmeta>'''
+        
+        fields = processor.parse_xmp_fields(xmp_xml)
+        
+        expected = {
+            'title': 'Test Title',
+            'description': 'Test Description',
+            'date_created': '2023-01-01T12:00:00Z',
+            'creator': 'Test Creator',
+            'keywords': 'keyword1, keyword2'
+        }
+        
+        assert fields == expected
+
+    def test_parse_xmp_fields_empty_xml(self):
+        """Test XMP field parsing with empty XML."""
+        processor = MetadataProcessor()
+        
+        fields = processor.parse_xmp_fields("")
+        
+        expected = {}
+        assert fields == expected
+
+    def test_parse_xmp_fields_invalid_xml(self):
+        """Test XMP field parsing with invalid XML."""
+        processor = MetadataProcessor()
+        
+        fields = processor.parse_xmp_fields("<invalid>xml</not_closed>")
+        
+        expected = {
+            'title': '',
+            'description': '',
+            'date_created': '',
+            'creator': '',
+            'keywords': ''
+        }
+        assert fields == expected
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_batch_extract_xmp_success(self, mock_exiftool):
+        """Test batch XMP extraction."""
+        mock_instance = mock_exiftool.return_value
+        
+        # Mock file discovery
+        test_files = [Path('test1.jpg'), Path('test2.jpg')]
+        mock_instance._get_files_to_process.return_value = test_files
+        
+        processor = MetadataProcessor()
+        
+        # Mock XMP extraction for each file
+        def mock_extract_xmp_xml(file_path):
+            if 'test1' in str(file_path):
+                return '<x:xmpmeta><rdf:RDF><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li>Title 1</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>'
+            else:
+                return ''  # No XMP for test2.jpg
+        
+        with patch.object(processor, 'extract_xmp_xml', side_effect=mock_extract_xmp_xml):
+            with patch.object(processor, 'parse_xmp_fields', return_value={'title': 'Title 1'}):
+                result = processor.batch_extract_xmp('/test/dir')
+        
+        assert result['summary']['total_files'] == 2
+        assert result['summary']['processed'] == 1
+        assert result['summary']['skipped'] == 1
+        assert len(result['processed']) == 1
+        assert len(result['skipped']) == 1
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_batch_extract_xmp_with_errors(self, mock_exiftool):
+        """Test batch XMP extraction with errors."""
+        mock_instance = mock_exiftool.return_value
+        
+        test_files = [Path('test1.jpg'), Path('test2.jpg')]
+        mock_instance._get_files_to_process.return_value = test_files
+        
+        processor = MetadataProcessor()
+        
+        # Mock XMP extraction with error for second file
+        def mock_extract_xmp_xml(file_path):
+            if 'test1' in str(file_path):
+                return '<x:xmpmeta>content</x:xmpmeta>'
+            else:
+                raise Exception("Processing error")
+        
+        with patch.object(processor, 'extract_xmp_xml', side_effect=mock_extract_xmp_xml):
+            with patch.object(processor, 'parse_xmp_fields', return_value={'title': 'Test'}):
+                result = processor.batch_extract_xmp('/test/dir')
+        
+        assert result['summary']['total_files'] == 2
+        assert result['summary']['processed'] == 1
+        assert result['summary']['errors'] == 1
+        assert len(result['processed']) == 1
+        assert len(result['errors']) == 1

@@ -347,3 +347,61 @@ class ExifToolWrapper:
                 
         except subprocess.CalledProcessError as e:
             raise ExifToolError(f"File validation failed: {e.stderr}")
+
+    def extract_xmp_packet(self, file_path: Union[str, Path]) -> str:
+        """Extract full XMP packet (with <?xpacket> declarations) from a file."""
+        file_path = Path(file_path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        # Use -XMP to extract XMP metadata directly
+        args = ["-XMP", "-b", str(file_path)]
+        try:
+            cmd = [self.exiftool_path] + args
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                check=False  # Don't raise on non-zero exit
+            )
+            
+            # Check if command was successful or if there's just no XMP
+            if result.returncode != 0:
+                if "no xmp" in result.stderr.lower() or not result.stdout.strip():
+                    return ""
+                raise ExifToolError(f"exiftool command failed: {result.stderr}")
+            
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            raise ExifToolError(f"exiftool command failed: {e.stderr}")
+        except UnicodeDecodeError:
+            # If UTF-8 fails, try with different approach
+            try:
+                cmd = [self.exiftool_path] + args
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=False,  # Get bytes
+                    check=False
+                )
+                if result.returncode != 0:
+                    return ""
+                # Decode with error handling
+                return result.stdout.decode('utf-8', errors='replace')
+            except Exception:
+                return ""
+
+    def extract_xmp_xml(self, file_path: Union[str, Path]) -> str:
+        """Extract clean XMP XML (just <x:xmpmeta> content) from a file."""
+        xmp_packet = self.extract_xmp_packet(file_path)
+        if not xmp_packet:
+            return ""
+        
+        # Extract content between <x:xmpmeta> tags
+        import re
+        match = re.search(r'(<x:xmpmeta.*?</x:xmpmeta>)', xmp_packet, re.DOTALL)
+        if match:
+            return match.group(1)
+        return ""
