@@ -9,9 +9,37 @@ from .exceptions import MetadataProcessingError
 class MetadataProcessor:
     """High-level interface for metadata operations."""
 
-    def __init__(self, exiftool_path: Optional[str] = None):
-        """Initialize with optional custom exiftool path."""
-        self.exiftool = ExifToolWrapper(exiftool_path)
+    def __init__(self, exiftool_path: Optional[str] = None, persistent: bool = False):
+        """Initialize with optional custom exiftool path and persistent mode."""
+        self.persistent = persistent
+        self.exiftool_path = exiftool_path
+        
+        if persistent:
+            self.exiftool = ExifToolWrapper(exiftool_path, persistent=True)
+        else:
+            self.exiftool = ExifToolWrapper(exiftool_path)
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup persistent process if needed."""
+        if self.persistent and hasattr(self.exiftool, '_stop_persistent_process'):
+            self.exiftool._stop_persistent_process()
+
+    def start_persistent_mode(self):
+        """Manually start persistent mode if not already active."""
+        if not self.persistent:
+            self.exiftool = ExifToolWrapper(self.exiftool_path, persistent=True)
+            self.persistent = True
+
+    def stop_persistent_mode(self):
+        """Manually stop persistent mode."""
+        if self.persistent and hasattr(self.exiftool, '_stop_persistent_process'):
+            self.exiftool._stop_persistent_process()
+            self.exiftool = ExifToolWrapper(self.exiftool_path, persistent=False)
+            self.persistent = False
 
     def extract_basic_info(self, file_path: Union[str, Path]) -> Dict:
         """Extract commonly used metadata fields."""

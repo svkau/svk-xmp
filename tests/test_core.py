@@ -1060,3 +1060,58 @@ class TestMetadataProcessor:
         # Should use individual processing for single file
         assert result['summary']['total_files'] == 1
         assert result['summary']['processed'] == 1
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_persistent_metadata_processor_context_manager(self, mock_exiftool_class):
+        """Test persistent MetadataProcessor as context manager."""
+        mock_wrapper = Mock()
+        mock_wrapper._stop_persistent_process = Mock()
+        mock_exiftool_class.return_value = mock_wrapper
+        
+        with MetadataProcessor(persistent=True) as processor:
+            assert processor.persistent is True
+            # Verify it was initialized with persistent=True
+            mock_exiftool_class.assert_called_with(None, persistent=True)
+        
+        # Verify cleanup was called
+        mock_wrapper._stop_persistent_process.assert_called_once()
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_persistent_metadata_processor_manual_control(self, mock_exiftool_class):
+        """Test manual persistent mode control."""
+        mock_wrapper_non_persistent = Mock()
+        mock_wrapper_persistent = Mock()
+        mock_wrapper_persistent._stop_persistent_process = Mock()
+        
+        def mock_exiftool_side_effect(*args, **kwargs):
+            if kwargs.get('persistent', False):
+                return mock_wrapper_persistent
+            else:
+                return mock_wrapper_non_persistent
+        
+        mock_exiftool_class.side_effect = mock_exiftool_side_effect
+        
+        # Start with non-persistent
+        processor = MetadataProcessor()
+        assert processor.persistent is False
+        
+        # Start persistent mode
+        processor.start_persistent_mode()
+        assert processor.persistent is True
+        
+        # Stop persistent mode
+        processor.stop_persistent_mode()
+        assert processor.persistent is False
+        mock_wrapper_persistent._stop_persistent_process.assert_called_once()
+
+    @patch('svk_xmp.core.metadata_processor.ExifToolWrapper')
+    def test_persistent_metadata_processor_extract_xmp(self, mock_exiftool_class):
+        """Test XMP extraction with persistent MetadataProcessor."""
+        mock_wrapper = Mock()
+        mock_wrapper.extract_xmp_xml.return_value = '<x:xmpmeta>test content</x:xmpmeta>'
+        mock_exiftool_class.return_value = mock_wrapper
+        
+        with MetadataProcessor(persistent=True) as processor:
+            result = processor.extract_xmp_xml('test.jpg')
+            assert result == '<x:xmpmeta>test content</x:xmpmeta>'
+            mock_wrapper.extract_xmp_xml.assert_called_once_with('test.jpg')

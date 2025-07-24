@@ -112,6 +112,23 @@ print(f"Keywords: {fields['keywords']}")
 # Batch XMP extraction
 result = processor.batch_extract_xmp('/path/to/directory', recursive=True)
 print(f"Found XMP data in {result['summary']['processed']} files")
+
+# For external scripts processing many individual files - use persistent mode
+with MetadataProcessor(persistent=True) as processor:
+    for image_file in my_image_files:
+        xmp_xml = processor.extract_xmp_xml(image_file)  # Much faster!
+        fields = processor.parse_xmp_fields(xmp_xml)
+        # Process your data...
+
+# Or manual control
+processor = MetadataProcessor()
+processor.start_persistent_mode()
+try:
+    for image_file in my_image_files:
+        xmp_xml = processor.extract_xmp_xml(image_file)  # Much faster!
+        # Process your data...
+finally:
+    processor.stop_persistent_mode()
 ```
 
 ### Web API
