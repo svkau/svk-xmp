@@ -327,33 +327,20 @@ class TestExifToolWrapper:
     # Note: Directory file discovery is tested through integration tests
     # The _get_files_to_process method is complex to mock due to Path method interactions
 
-    @patch('shutil.which', return_value='/usr/bin/exiftool')
-    def test_get_files_from_zip(self, mock_which):
-        """Test file discovery from zip archive."""
-        wrapper = ExifToolWrapper()
-        
-        # Mock zip file contents
-        mock_file_info = Mock()
-        mock_file_info.is_dir.return_value = False
-        mock_file_info.filename = 'image.jpg'
-        
-        mock_zip = Mock()
-        mock_zip.filelist = [mock_file_info]
-        mock_zip.__enter__ = Mock(return_value=mock_zip)
-        mock_zip.__exit__ = Mock(return_value=None)
-        
-        with patch('zipfile.ZipFile', return_value=mock_zip):
-            files = wrapper._get_files_from_zip(Path('test.zip'), ['.jpg'])
-            assert files == ['test.zip#image.jpg']
 
     @patch('shutil.which', return_value='/usr/bin/exiftool')
-    def test_get_files_from_zip_bad_zip(self, mock_which):
-        """Test file discovery from corrupted zip."""
+    def test_sync_metadata_skip_zip_files(self, mock_which):
+        """Test that zip files are properly skipped with explanation."""
         wrapper = ExifToolWrapper()
         
-        with patch('zipfile.ZipFile', side_effect=zipfile.BadZipFile):
-            with pytest.raises(ExifToolError):
-                wrapper._get_files_from_zip(Path('bad.zip'), ['.jpg'])
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch.object(wrapper, '_get_files_to_process', return_value=[Path('test.zip')]):
+                result = wrapper.sync_metadata('test.zip', verbose=True)
+                
+                assert result['summary']['total_files'] == 1
+                assert result['summary']['processed'] == 0
+                assert result['summary']['skipped'] == 1
+                assert result['skipped'] == ['test.zip']
 
     @patch('shutil.which', return_value='/usr/bin/exiftool')
     def test_validate_file_success(self, mock_which):

@@ -3,7 +3,6 @@
 import subprocess
 import json
 import shutil
-import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Callable, Any
 from .exceptions import ExifToolError, ExifToolNotFoundError
@@ -231,8 +230,9 @@ class ExifToolWrapper:
         
         if path.is_file():
             if path.suffix.lower() == '.zip':
-                # Handle zip file
-                files.extend(self._get_files_from_zip(path, file_extensions))
+                # Skip zip files - exiftool doesn't support writing to zip archives
+                # This will be handled in processing to show as skipped with explanation
+                files.append(path)
             elif path.suffix.lower() in file_extensions:
                 files.append(path)
             else:
@@ -247,21 +247,6 @@ class ExifToolWrapper:
         
         return sorted(files)
     
-    def _get_files_from_zip(self, zip_path: Path, file_extensions: List[str]) -> List[str]:
-        """Get list of image files from zip archive that can be processed by exiftool."""
-        files = []
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                for file_info in zf.filelist:
-                    if not file_info.is_dir():
-                        file_ext = Path(file_info.filename).suffix.lower()
-                        if file_ext in file_extensions:
-                            # Return zip file paths in exiftool format
-                            files.append(f"{zip_path}#{file_info.filename}")
-        except zipfile.BadZipFile:
-            raise ExifToolError(f"Invalid zip file: {zip_path}")
-        
-        return files
     
     def _sync_single_file(self, file_path: Union[Path, str], args_file: Path, result: Dict, verbose: bool):
         """Synchronize metadata for a single file."""
@@ -271,11 +256,19 @@ class ExifToolWrapper:
         if isinstance(file_path, Path):
             file_ext = file_path.suffix.lower()
         else:
-            # Handle zip file entries
+            # Handle zip file entries (though we no longer process them)
             if '#' in file_str:
                 file_ext = Path(file_str.split('#')[1]).suffix.lower()
             else:
                 file_ext = Path(file_str).suffix.lower()
+        
+        # Skip zip files - exiftool doesn't support writing to zip archives
+        if file_ext == '.zip':
+            result['skipped'].append(file_str)
+            result['summary']['skipped'] += 1
+            if verbose:
+                print(f"SKIPPED: {file_str} (zip files not supported - exiftool cannot write to zip archives)")
+            return
         
         # Skip non-image files
         image_extensions = ['.jpg', '.jpeg', '.jpe', '.tif', '.tiff', '.png', '.gif', '.bmp', '.webp']
