@@ -2,7 +2,7 @@
 
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, mock_open
 import json
 import subprocess
 import zipfile
@@ -738,13 +738,19 @@ class TestMetadataProcessor:
         
         mock_result = Mock()
         mock_result.returncode = 0
-        mock_result.stdout = mock_xmp_content
+        mock_result.stdout = ""
         mock_result.stderr = ""
         
         with patch('subprocess.run', return_value=mock_result):
             with patch('pathlib.Path.exists', return_value=True):
-                result = wrapper.extract_xmp_packet('test.jpg')
-                assert result == mock_xmp_content
+                with patch('tempfile.NamedTemporaryFile') as mock_temp:
+                    mock_temp.return_value.__enter__.return_value.name = '/tmp/test.xmp'
+                    with patch('os.path.exists', return_value=True):
+                        with patch('os.path.getsize', return_value=100):
+                            with patch('builtins.open', mock_open(read_data=mock_xmp_content)):
+                                with patch('os.unlink'):
+                                    result = wrapper.extract_xmp_packet('test.jpg')
+                                    assert result == mock_xmp_content
 
     @patch('shutil.which', return_value='/usr/bin/exiftool')
     def test_extract_xmp_packet_no_xmp(self, mock_which):
